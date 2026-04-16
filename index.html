@@ -75,15 +75,14 @@
     </div>
     <div class="field">
       <label>Phone number</label>
-      <input type="text" id="phone" placeholder="+1 (940) 286-4738" />
+      <input type="text" id="phone" placeholder="+1 (000) 000-0000" />
     </div>
   </div>
 
   <div class="card">
     <div class="section-label">Scenario / tag</div>
     <div class="tag-grid">
-      <button class="tag-btn active" data-tag="" onclick="selectTag(this)"><span class="tag-dot"></span>No tag — fresh lead</button>
-      <button class="tag-btn" data-tag="talk-now" onclick="selectTag(this)"><span class="tag-dot"></span>talk-now</button>
+      <button class="tag-btn active" data-tag="talk-now" onclick="selectTag(this)"><span class="tag-dot"></span>talk-now</button>
       <button class="tag-btn" data-tag="callback-requested" onclick="selectTag(this)"><span class="tag-dot"></span>callback-requested</button>
       <button class="tag-btn" data-tag="visit-requested" onclick="selectTag(this)"><span class="tag-dot"></span>visit-requested</button>
       <button class="tag-btn" data-tag="14 day campaign" onclick="selectTag(this)"><span class="tag-dot"></span>14 day campaign</button>
@@ -105,7 +104,7 @@
   const API_KEY = 'pit-13d9e781-e04a-47bc-a008-4c133fdb3e78';
   const LOCATION_ID = 'HZQNjTjTpWn8O1FXTAWu';
   let currentContactId = null;
-  let selectedTag = '';
+  let selectedTag = 'talk-now';
 
   function selectTag(el) {
     document.querySelectorAll('.tag-btn').forEach(b => b.classList.remove('active'));
@@ -123,26 +122,67 @@
     }
   }
 
+  async function findContactByPhone(phone) {
+    const res = await fetch('https://services.leadconnectorhq.com/contacts/?locationId=' + LOCATION_ID + '&query=' + encodeURIComponent(phone), {
+      headers: { 'Authorization': 'Bearer ' + API_KEY, 'Version': '2021-07-28' }
+    });
+    const data = await res.json();
+    const contacts = data.contacts || [];
+    return contacts.length > 0 ? contacts[0].id : null;
+  }
+
+  async function deleteContact(id) {
+    await fetch('https://services.leadconnectorhq.com/contacts/' + id, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + API_KEY, 'Version': '2021-07-28' }
+    });
+  }
+
+  async function createContact(firstName, lastName, phone) {
+    const body = { firstName, lastName, phone, locationId: LOCATION_ID, tags: selectedTag ? [selectedTag] : [] };
+    const res = await fetch('https://services.leadconnectorhq.com/contacts/', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + API_KEY, 'Content-Type': 'application/json', 'Version': '2021-07-28' },
+      body: JSON.stringify(body)
+    });
+    return res;
+  }
+
   async function createLead() {
     const firstName = document.getElementById('firstName').value.trim();
     const lastName = document.getElementById('lastName').value.trim();
     const phone = document.getElementById('phone').value.trim();
     if (!phone) { setStatus('Phone number is required.', 'error'); return; }
+
     document.getElementById('createBtn').disabled = true;
     setStatus('Creating contact in GHL...', 'loading');
-    const body = { firstName, lastName, phone, locationId: LOCATION_ID, tags: selectedTag ? [selectedTag] : [] };
+
     try {
-      const res = await fetch('https://services.leadconnectorhq.com/contacts/', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + API_KEY, 'Content-Type': 'application/json', 'Version': '2021-07-28' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      if (!res.ok) { setStatus('Error: ' + (data.message || res.status), 'error'); document.getElementById('createBtn').disabled = false; return; }
+      let res = await createContact(firstName, lastName, phone);
+      let data = await res.json();
+
+      if (!res.ok && data.message && data.message.toLowerCase().includes('duplicat')) {
+        setStatus('Duplicate found — deleting and recreating...', 'loading');
+        const existingId = await findContactByPhone(phone);
+        if (existingId) {
+          await deleteContact(existingId);
+          await new Promise(r => setTimeout(r, 800));
+        }
+        res = await createContact(firstName, lastName, phone);
+        data = await res.json();
+      }
+
+      if (!res.ok) {
+        setStatus('Error: ' + (data.message || res.status), 'error');
+        document.getElementById('createBtn').disabled = false;
+        return;
+      }
+
       currentContactId = data.contact?.id || data.id;
       document.getElementById('resetBtn').disabled = false;
       document.getElementById('contactId').textContent = 'Contact ID: ' + currentContactId;
       setStatus('Contact created — workflow triggered.', 'success');
+
     } catch (err) {
       setStatus('Network error: ' + err.message, 'error');
       document.getElementById('createBtn').disabled = false;
